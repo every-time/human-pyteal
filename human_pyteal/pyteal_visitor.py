@@ -29,7 +29,7 @@ class PyTealVisitor(NodeVisitor):
             self.function_return_types[node.name] = return_type
 
             if node.args.args or node.args.vararg or node.args.kwonlyargs or node.args.kw_defaults or node.args.kwarg or node.args.defaults:
-                raise NotImplementedError('Only positional argument are allowed for ' + node.name)
+                raise NotImplementedError('Only positional arguments are allowed for ' + node.name)
 
             self.function_argument_types[node.name] = {}
 
