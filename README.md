@@ -1,4 +1,4 @@
-# human-pyteal
+# human-pyteal: [WIP] PyTeal for humans!
 
 - [ ] PyTeal objects and functions (`Txn`, `App`, `Balance`, `Sha256`, etc.)
 - [ ] ABI support
@@ -7,7 +7,14 @@
 - [ ] For loops
 - [ ] Importing functions from other modules
 
+## Example usage
+
 ```py
+from pyteal import Mode
+
+import human_pyteal
+
+
 def add_str(x: str, y: str, /) -> str:
     return x + y
 
@@ -44,6 +51,10 @@ def get_program() -> int:
         i += 1
 
     return True
+
+
+transform_result = human_pyteal.transform(get_program, mode=Mode.Application, version=5)
+print(transform_result.formatted_pyteal_program)
 ```
 
 ->
