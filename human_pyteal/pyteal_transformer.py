@@ -1,6 +1,6 @@
 import ast
 import warnings
-from _ast import Constant, Call, Name, Return, FunctionDef, Assert, Attribute, While, Continue, Break, BoolOp, And, Or, UnaryOp, Not, Raise, If, Pass, IfExp, BinOp, Add, Expr, Assign, AST, Load, AugAssign
+from _ast import Constant, Call, Name, Return, FunctionDef, Assert, Attribute, While, Continue, Break, BoolOp, And, Or, UnaryOp, Not, Raise, If, Pass, IfExp, BinOp, Add, Expr, Assign, AST, Load, AugAssign, Compare
 from ast import NodeTransformer
 from typing import Optional, Any
 
@@ -193,6 +193,20 @@ class PyTealTransformer(NodeTransformer):
                 return Call(utility.create_name('Concat'), args=[node.left, node.right], keywords=[])
 
         return node
+
+    def visit_Compare(self, node: Compare):
+        self.generic_visit(node)
+
+        if len(node.comparators) == 1:
+            return node
+
+        compare_node = Call(utility.create_name('And'), args=[], keywords=[])
+
+        for i, op in enumerate(node.ops):
+            left = node.left if i == 0 else node.comparators[i - 1]
+            compare_node.args.append(Compare(left=left, ops=[op], comparators=[node.comparators[i]]))
+
+        return compare_node
 
     def visit_Raise(self, node: Raise):
         self.generic_visit(node)
