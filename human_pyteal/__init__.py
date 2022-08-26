@@ -1,6 +1,7 @@
 import ast
 import inspect
-from _ast import AST
+from _ast import Module
+from typing import Optional
 
 import black
 import pyteal
@@ -13,7 +14,7 @@ from human_pyteal.pyteal_visitor import PyTealVisitor
 
 
 def transform(target_function: callable, *args, **kwargs) -> TransformResult:
-    sorted_functions: list[tuple[str, AST]] = []
+    sorted_functions: list[tuple[str, Module]] = []
 
     for function_name, function in inspect.getmembers(inspect.getmodule(target_function), inspect.isfunction):
         item = (function_name, ast.parse(inspect.getsource(function)))
@@ -31,27 +32,27 @@ def transform(target_function: callable, *args, **kwargs) -> TransformResult:
 
     module = ast.parse('from pyteal import *')
     module.body += [tree for function_name, tree in sorted_functions if function_name in visitor.target_function_calls]
-    pyteal_program = ast.unparse(ast.fix_missing_locations(PyTealTransformer(target_function.__name__, visitor).visit(module)))
-    teal_program = None
+    pyteal_program = ast.unparse(ast.fix_missing_locations(PyTealTransformer(target_function.__name__, visitor.teal_functions).visit(module)))
+    teal_program: Optional[str] = None
 
     try:
-        formatted_pyteal_program = black.format_str(pyteal_program, mode=FileMode())
+        formatted_pyteal_program: Optional[str] = black.format_str(pyteal_program, mode=FileMode())
     except Exception as e:
-        utility.print_exception(e, 'PyTeal formatting')
+        utility.print_action_exception(e, 'PyTeal formatting')
         formatted_pyteal_program = None
 
     try:
         pyteal_env = {}
         exec(pyteal_program, pyteal_env)
-        pyteal_ast = pyteal_env[target_function.__name__]()
+        pyteal_ast: Optional[pyteal.Expr] = pyteal_env[target_function.__name__]()
     except Exception as e:
-        utility.print_exception(e, 'PyTeal parsing')
+        utility.print_action_exception(e, 'PyTeal parsing')
         pyteal_ast = None
 
     if pyteal_ast:
         try:
             teal_program = pyteal.compileTeal(pyteal_ast, *args, **kwargs)
         except Exception as e:
-            utility.print_exception(e, 'PyTeal compilation')
+            utility.print_action_exception(e, 'PyTeal compilation')
 
     return TransformResult(pyteal_program, formatted_pyteal_program, pyteal_ast, teal_program)

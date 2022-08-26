@@ -8,36 +8,35 @@ import pyteal
 from pyteal import TealType, ScratchVar, SubroutineFnWrapper
 
 from human_pyteal import utility
-from human_pyteal.container import Variable
-from human_pyteal.pyteal_visitor import PyTealVisitor
+from human_pyteal.container import TealFunction
 
 
 class PyTealTransformer(NodeTransformer):
-    def __init__(self, target_function_name: str, visitor: PyTealVisitor):
+    def __init__(self, target_function_name: str, teal_functions: dict[str, TealFunction]):
         self._target_function_name = target_function_name
-        self._visitor = visitor
-
-        self._variables: dict[str, Variable] = {}
-        self._unknown_assign_nodes: list[Assign] = []
+        self._teal_functions = teal_functions
+        self._variables: dict[str, ScratchVar] = {}
+        self._assign_nodes: list[Assign] = []
         self._current_function_name: Optional[str] = None
         self._locals_: dict[str, Any] = {}
 
     def _teal_type(self, node: AST):
         teal_type: Optional[TealType] = None
 
-        if isinstance(node, Call) and isinstance(node.func, Name) and node.func.id in self._visitor.function_return_types:
-            teal_type = self._visitor.function_return_types[node.func.id]
-        elif isinstance(node, Name) and node.id in self._variables:
-            teal_type = self._variables[node.id].scratch_var.type
-        elif isinstance(node, Name) and node.id in self._visitor.function_argument_types[self._current_function_name]:
-            # TODO: Consolidate the below code with the above.
-            teal_type = self._visitor.function_argument_types[self._current_function_name][node.id]
-        else:
+        if isinstance(node, Name):
+            if node.id in self._variables:
+                teal_type = self._variables[node.id].type
+            elif node.id in self._teal_functions[self._current_function_name].arguments:
+                teal_type = self._teal_functions[self._current_function_name].arguments[node.id]
+        elif isinstance(node, Call) and isinstance(node.func, Name) and node.func.id in self._teal_functions:
+            teal_type = self._teal_functions[node.func.id].return_type
+
+        if not teal_type:
             try:
-                self._locals_.update({k: v.scratch_var for k, v in self._variables.items()})
+                self._locals_.update(self._variables)
                 teal_type = eval(ast.unparse(node), pyteal.__dict__, self._locals_).type_of()
             except Exception as e:
-                warnings.warn(f'Failed to determine Teal type ({ast.unparse(node)}): {e}')
+                warnings.warn(f'Failed to determine the Teal type for {ast.unparse(node)}: {e}')
 
         return teal_type
 
@@ -46,29 +45,28 @@ class PyTealTransformer(NodeTransformer):
             arg.annotation = None
 
         if node.name != self._target_function_name:
-            decorator_node = Attribute(utility.create_name('TealType'), attr=self._visitor.function_return_types[node.name].name)
+            decorator_node = Attribute(utility.create_name('TealType'), attr=self._teal_functions[node.name].return_type.name)
             node.decorator_list.append(Call(utility.create_name('Subroutine'), args=[decorator_node], keywords=[]))
 
         self._variables.clear()
-        self._unknown_assign_nodes.clear()
+        self._assign_nodes.clear()
         self._current_function_name = node.name
 
-        self._locals_ = {k: SubroutineFnWrapper(lambda: pyteal.Return(), v) for k, v in self._visitor.function_return_types.items()}
-        self._locals_.update({k: pyteal.SubroutineFnWrapper(lambda: pyteal.Return(), v)() for k, v in self._visitor.function_argument_types[self._current_function_name].items()})
+        self._locals_.clear()
+        self._locals_ = {k: SubroutineFnWrapper(lambda: pyteal.Return(), v.return_type) for k, v in self._teal_functions.items()}
+        self._locals_.update({k: pyteal.SubroutineFnWrapper(lambda: pyteal.Return(), v)() for k, v in self._teal_functions[self._current_function_name].arguments.items()})
 
         node.returns = None
         self.generic_visit(node)
-
-        body: list[AST] = self._unknown_assign_nodes + [variable.assign_node for variable in self._variables.values()]
+        body: list[AST] = self._assign_nodes
         node.body = body + [Return(Call(utility.create_name('Seq'), args=[*node.body], keywords=[]))]
-
         return node
 
     def visit_Expr(self, node: Expr):
         self.generic_visit(node)
 
         if isinstance(node.value, Call) and isinstance(node.value.func, Name):
-            if node.value.func.id == 'Log' or self._visitor.function_return_types.get(node.value.func.id) == TealType.none:
+            if node.value.func.id == 'Log' or node.value.func.id in self._teal_functions and self._teal_functions[node.value.func.id].return_type == TealType.none:
                 return node
 
         return Call(utility.create_name('Pop'), args=[node], keywords=[])
@@ -84,35 +82,30 @@ class PyTealTransformer(NodeTransformer):
 
     def visit_Assign(self, node: Assign):
         self.generic_visit(node)
-
         teal_type = self._teal_type(node.value)
-        body_assign_nodes: list[AST] = []
+        seq_nodes: list[Assign | Call] = []
 
         for target in node.targets:
-            if not isinstance(target, Name):
-                self._unknown_assign_nodes.append(Assign(targets=[target], value=node.value))
-                continue
-
-            if not teal_type:
-                # TODO: Consolidate the below code with the above.
+            if not teal_type or not isinstance(target, Name):
                 assign_node = Assign(targets=[target], value=node.value)
 
-                if target.id in self._variables:
-                    body_assign_nodes.append(assign_node)
+                if isinstance(target, Name) and target.id in self._variables:
+                    seq_nodes.append(assign_node)
                 else:
-                    self._unknown_assign_nodes.append(assign_node)
+                    self._assign_nodes.append(assign_node)
 
                 continue
 
             if target.id not in self._variables:
                 assign_node = Attribute(utility.create_name('TealType'), attr=teal_type.name)
                 assign_node = Call(utility.create_name('ScratchVar'), args=[assign_node], keywords=[])
-                self._variables[target.id] = Variable(ScratchVar(teal_type), Assign(targets=[target], value=assign_node))
+                self._assign_nodes.append(Assign(targets=[target], value=assign_node))
+                self._variables[target.id] = ScratchVar(teal_type)
 
-            store_node = Attribute(target, attr='store')
-            body_assign_nodes.append(Call(store_node, args=[node.value], keywords=[]))
+            store_call = Attribute(target, attr='store')
+            seq_nodes.append(Call(store_call, args=[node.value], keywords=[]))
 
-        return body_assign_nodes
+        return seq_nodes
 
     def visit_AugAssign(self, node: AugAssign):
         if isinstance(node.target, Name):
@@ -130,10 +123,6 @@ class PyTealTransformer(NodeTransformer):
                 node.func.id = 'Log'
             elif node.func.id == 'len':
                 node.func.id = 'Len'
-            elif node.func.id == 'int':
-                node.func.id = 'Btoi'
-            elif node.func.id == 'bytes':
-                node.func.id = 'Itob'
 
         return node
 
@@ -147,7 +136,6 @@ class PyTealTransformer(NodeTransformer):
 
     def visit_While(self, node: While):
         self.generic_visit(node)
-
         while_node = Call(utility.create_name('While'), args=[node.test], keywords=[])
         while_node = Attribute(while_node, attr='Do')
         return Call(while_node, args=[*node.body], keywords=[])
@@ -208,7 +196,6 @@ class PyTealTransformer(NodeTransformer):
 
     def visit_Raise(self, node: Raise):
         self.generic_visit(node)
-
         raise_node = Call(utility.create_name('Err'), args=[], keywords=[])
         comment = utility.bytes_value(node.exc)
 
@@ -219,7 +206,6 @@ class PyTealTransformer(NodeTransformer):
 
     def visit_Assert(self, node: Assert):
         self.generic_visit(node)
-
         assert_node = Call(utility.create_name('Assert'), args=[node.test], keywords=[])
         comment = utility.bytes_value(node.msg)
 

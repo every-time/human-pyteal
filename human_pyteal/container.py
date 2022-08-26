@@ -1,15 +1,14 @@
-from _ast import Assign
 from dataclasses import dataclass
 from typing import Optional
 
 import pyteal
-from pyteal import ScratchVar
+from pyteal import TealType
 
 
 @dataclass
-class Variable:
-    scratch_var: ScratchVar
-    assign_node: Assign
+class TealFunction:
+    arguments: dict[str, TealType]
+    return_type: TealType
 
 
 @dataclass
