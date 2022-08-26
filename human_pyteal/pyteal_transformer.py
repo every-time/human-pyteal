@@ -23,11 +23,10 @@ class PyTealTransformer(NodeTransformer):
     def _teal_type(self, node: AST):
         teal_type: Optional[TealType] = None
 
-        if isinstance(node, Name):
-            if node.id in self._variables:
-                teal_type = self._variables[node.id].type
-            elif node.id in self._teal_functions[self._current_function_name].arguments:
-                teal_type = self._teal_functions[self._current_function_name].arguments[node.id]
+        if isinstance(node, Call) and isinstance(node.func, Attribute) and isinstance(node.func.value, Name) and node.func.value.id in self._variables:
+            teal_type = self._variables[node.func.value.id].type
+        elif isinstance(node, Name) and node.id in self._teal_functions[self._current_function_name].arguments:
+            teal_type = self._teal_functions[self._current_function_name].arguments[node.id]
         elif isinstance(node, Call) and isinstance(node.func, Name) and node.func.id in self._teal_functions:
             teal_type = self._teal_functions[node.func.id].return_type
 
